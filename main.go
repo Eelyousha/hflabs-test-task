@@ -6,13 +6,14 @@ import (
 	"fmt"
 	strip "github.com/grokify/html-strip-tags-go"
 	"golang.org/x/net/html"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/joho/godotenv"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
@@ -123,42 +124,54 @@ func parseTable(text string) (res [][]interface{}) {
 }
 
 func main() {
+	err := godotenv.Load(".env")
+	if err != nil {
+		panic(err)
+	}
+
+	// Get HTML code from the page
+	url := os.Getenv("TABLE_LINK")
+
+	// Connect program to Google Sheets
+	ctx := context.Background()
+	b, err := os.ReadFile("credentials.json")
+	if err != nil {
+		log.Fatalf("Unable to read client secret file: %v", err)
+	}
+
+	// If modifying these scopes, delete your previously saved token.json.
+	config, err := google.ConfigFromJSON(b, "https://www.googleapis.com/auth/spreadsheets")
+	if err != nil {
+		log.Fatalf("Unable to parse client secret file to config: %v", err)
+	}
+	client := getClient(config)
+
+	srv, err := sheets.NewService(ctx, option.WithHTTPClient(client))
+	if err != nil {
+		log.Fatalf("Unable to retrieve Sheets client: %v", err)
+	}
+
+	spreadsheetId := os.Getenv("SHEET_ID")
+	headerRange := "Page1!A1:B"
+
 	for {
-		url := "https://confluence.hflabs.ru/pages/viewpage.action?pageId=1181220999"
 		resp, err := http.Get(url)
 		if err != nil {
 			panic(err)
 		}
 		defer resp.Body.Close()
-		htmlData, err := ioutil.ReadAll(resp.Body)
+
+		buf := new(strings.Builder)
+		_, err = io.Copy(buf, resp.Body)
 		if err != nil {
 			panic(err)
 		}
 
+		htmlData := buf.String()
 		data := getDataFromTag(string(htmlData), "<div class=\"table-wrap\">", "</div>")
 		headers := getHeaderValues(data)
 
-		ctx := context.Background()
-		b, err := os.ReadFile("credentials.json")
-		if err != nil {
-			log.Fatalf("Unable to read client secret file: %v", err)
-		}
-
-		// If modifying these scopes, delete your previously saved token.json.
-		config, err := google.ConfigFromJSON(b, "https://www.googleapis.com/auth/spreadsheets")
-		if err != nil {
-			log.Fatalf("Unable to parse client secret file to config: %v", err)
-		}
-		client := getClient(config)
-
-		srv, err := sheets.NewService(ctx, option.WithHTTPClient(client))
-		if err != nil {
-			log.Fatalf("Unable to retrieve Sheets client: %v", err)
-		}
-
-		spreadsheetId := "1ubILHw8TfZLIMMjvy0POPWsu2UsgGs70dn6EvCocW38"
-		headerRange := "Page1!A1:B"
-
+		// Process data from HTML to Sheets
 		headerInput := make([][]interface{}, 1)
 		headerInput[0] = make([]interface{}, len(headers))
 		for i, _ := range headerInput[0] {
@@ -170,10 +183,11 @@ func main() {
 			log.Fatal(err)
 		}
 
-		fieldsRange := "Page1!A2:B" // TODO: Update placeholder value.
-		// How the input data should be interpreted.
-		valueInputOption := "RAW" // TODO: Update placeholder values
+		fieldsRange := "Page1!A2:B"
+		valueInputOption := "RAW"
+
 		valueInput := make([][]interface{}, 0)
+
 		for strings.Index(data, "<td ") != -1 {
 			var tmpVal []string
 			tmpInterface := make([]interface{}, 2)
@@ -195,6 +209,6 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		time.Sleep(5 * time.Second)
+		time.Sleep(15 * time.Second)
 	}
 }
